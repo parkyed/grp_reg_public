@@ -1,0 +1,72 @@
+---
+title: "Download and format Blood Transcriptional Modules into named pathway list"
+author: "Ed Parkinson"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+## load libraries
+
+```{r}
+
+here::i_am("bin/ggs_btm_mapping.Rmd")
+
+library(here)
+library(tidyverse)
+
+```
+
+## load btms from csv file
+
+```{r}
+
+btm.table <- read.table(file = here("btm", "btm_annotation.csv"), header = T, sep = ',')
+
+```
+
+## convert to named list, filter out large modules and save
+
+```{r}
+
+# convert to named list - pathways as names, and genes as list members
+
+btm.list <- btm.table %>% dplyr::select(Composite.name, Module.member.genes) %>% 
+  dplyr::rename("pathway_name" = "Composite.name",
+                "ncbi_gene_name" = "Module.member.genes") %>% 
+  tidyr::separate_longer_delim(ncbi_gene_name, delim = ',') %>% 
+  tidyr::separate_longer_delim(ncbi_gene_name, delim = '///') %>% 
+  dplyr::mutate(ncbi_gene_name = trimws(ncbi_gene_name))  %>% 
+  group_by(pathway_name) %>% 
+  summarise(genes = list(ncbi_gene_name)) %>% 
+  dplyr::pull(var = genes, name = pathway_name)
+
+# identify large and generic pathways to exclude from analysis
+
+btm.pw.lengths <- lapply(btm.list, length)
+
+btm.df <- data.frame(btm.name = names(btm.pw.lengths),
+           n.genes =  btm.pw.lengths %>% unname %>% unlist) %>% 
+  arrange(-n.genes)
+
+# view modules ranked by number of gene members
+
+btm.df %>% head(20)
+
+# filter out modules with more than 50 members - removes mainly generic modules either 'enriched in' or 'surface signature'
+# representing broad cell types, rather than specific functional processes with in a cell
+# could be more precise that to use size, but a good proxy initially
+
+filtered.mods <- btm.df %>% 
+  dplyr::filter(n.genes <=50) %>% 
+  .$btm.name
+
+btm.list <- btm.list[filtered.mods]
+
+# save outputs
+
+save(btm.list, file = here("btm", "btm.pathway.named.list.RData"))
+
+```
+
+

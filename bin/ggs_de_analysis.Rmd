@@ -1,0 +1,132 @@
+---
+title: "Grouped Regression Models - Differential Expression Analysis: Smith / Training dataset"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+## load libraries
+
+```{r}
+
+# general data wrangling
+library(here)
+library(tibble)
+library(dplyr)
+library(ggplot2)
+
+# bioinformatics
+library(limma)
+library(oligo)
+
+# scripts
+source(here("scr", "calcDE.R"))
+source(here("scr", "colours.R"))
+
+```
+
+Load pre-processed dataset
+
+```{r}
+
+# filtered expression set - unscaled intensity data
+
+# exp.mat.var.fil <- read.table(file = here("output", "smith.exp.mat.var.fil.csv"), header = T, sep = ',')
+exp.mat.var.fil <- read.table(file = here("input", "training", "training.smith.unscaled.csv"), header = T, sep = ',')
+
+sample.info <- read.table(file = here("input", "training", "targets_62.csv"), sep=",", header=T)
+
+# (y.true <- read.table(file = here("output", "y.true.csv"), header = F, sep = ',', check.names = F))
+y.true <- read.table(file = here("input", "training", "training.y.true.csv"), header = F, sep = ',', check.names = F)
+(y.true <- as.numeric(y.true[[1]]))
+
+```
+
+DE analysis
+
+Note: this analysis includes all sources of infection. Could filter out viral and bacterial
+
+```{r}
+
+# all samples DE analysis - double checking that sep3 genes are all DE, when looking at the whole dataset
+
+exp.mat.de <- t(exp.mat.var.fil)
+exp.mat.de[1:10,1:10]
+exp.mat.de %>% dim
+
+# add in row names, and match column names used in the calcDECondition function
+rownames(sample.info) <- sample.info$analysisID
+colnames(sample.info) <- c("sampleID", "condition")
+
+
+# calculate DE genes
+de.res <- calcDECondition(exp.mat = exp.mat.de,
+                                    samp.info = sample.info,
+                                    gene.lst = rownames(exp.mat.de),
+                                    res.number = Inf) %>% 
+  
+  dplyr::select(logFC, adj.P.Val) %>%
+  
+  dplyr::mutate(is.signif  = case_when(adj.P.Val < 0.05 ~ T,
+                                       T~ F)) %>% 
+  
+  tibble::rownames_to_column(var = 'gene.symbol')
+
+# rename columns for consistency across datasets
+
+colnames(de.res) <- c("gene.symbol", "log2FoldChange", "padj", "is.signif")
+
+# save DE results table
+
+write.table(x = de.res,
+            file=here("output", "smith", "de.res.csv"),
+            sep = ',',
+            row.names = T,
+            col.names = T,
+            quote = F)
+
+```
+
+## Figure 2: Volcano of the DE genes - indicating fold change and p value thresholds.
+
+```{r}
+
+# redefine highlighted genes
+
+fc.thresh <- 1
+
+# de.res <- de.res %>% dplyr::mutate(highlight  = case_when(padj < 0.05 & (log2FoldChange >= fc.thresh | log2FoldChange <= -fc.thresh) ~ T, T~ F))
+
+de.res <- de.res %>% dplyr::mutate(highlight  = factor(case_when(padj < 0.05 & log2FoldChange >= fc.thresh ~ 1,
+                                                          padj < 0.05 & log2FoldChange <= -fc.thresh ~ 2,
+                                                          T~ 3)))
+
+# sprintf("The number of highlighted DE genes is:  %.i", sum(de.res$highlight))
+sprintf("The number of highlighted DE genes is:  %.i", nrow(de.res %>% dplyr::filter(highlight %in% c(1,2))))
+
+
+# volcano plot
+(all.genes.fc.volcano <- ggplot(de.res) +
+  geom_point(aes(x = log2FoldChange,
+                 y = -log10(padj),
+                 color = highlight)) +
+  geom_hline(aes(yintercept = -log10(0.05)), linewidth = 0.25, linetype = "dashed", colour = 'black') +
+  geom_vline(aes(xintercept = fc.thresh), linewidth = 0.25, linetype = "dashed", colour = 'black') +
+  geom_vline(aes(xintercept = -fc.thresh), linewidth = 0.25, linetype = "dashed", colour = 'black') +
+  theme_bw() +
+  scale_x_continuous(breaks = c(-2,-1,0,1,2,3), limits = c(-2.5, 3)) +
+  labs(y=expression("-Log"[10]*"( Adjusted P value )"), x=expression("Log"[2]~"fold change")) +
+  theme(legend.position = "none",
+        # legend.position.inside=c(0.2,0.85),
+        axis.text.x = element_text(size = 20),
+        axis.text.y = element_text(size = 20),
+        axis.title.x = element_text(size = 20),
+        axis.title.y = element_text(size = 20),
+       legend.title = element_blank()) +
+  scale_color_manual(values=c(cbp1[2], cbp1[3], cbp1[1]), labels = c("Not Significant", "Significant"))
+)
+
+ggsave(filename = "all.genes.fc.volcano.pdf", plot = all.genes.fc.volcano, width = 12, height = 8, dpi = 1200, path = here("figs", "de_analysis"))
+
+```
+

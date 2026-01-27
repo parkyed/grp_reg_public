@@ -1,0 +1,271 @@
+---
+title: "Calculation of pathway heteogenaity measure"
+author: "Ed Parkinson"
+editor_options: 
+  chunk_output_type: console
+---
+
+=====
+
+## load libraries
+
+```{r}
+
+here::i_am("bin/ggs_mhs.Rmd")
+
+library(here)
+library(tidyverse)
+library(ggrepel)
+library(infotheo)
+library(mpmi)
+library(tictoc)
+library(pheatmap)
+library(RColorBrewer)
+library(xtable)      # creating latex tables
+
+# source(file = here("scr", "sepsis_biomarker_signatures.R"))
+source(file = here("scr", "filterToGeneList.R"))
+source(file = here("scr", "calcMeanPwMI.R"))
+source(file = here("scr", "minMaxScale.R"))
+source(file = here("scr", "plotGGHeatMap.R"))
+
+```
+
+## define dataset and pathway groupings
+
+**to be updated with relative paths once pre-processing incorporated into project**
+
+```{r}
+
+# select training dataset
+
+dataset <- "smith"
+
+if(dataset == "smith"){
+  data.path.scaled   <- "/Users/ep/Documents/1_datasets/dataset_smith_2014/output/smith.exp.mat.var.fil.scaled.csv"
+  data.path.raw      <- "/Users/ep/Documents/1_datasets/dataset_smith_2014/output/smith.exp.mat.var.fil.csv"
+  samp.info.path     <- "/Users/ep/Documents/1_datasets/dataset_smith_2014/output/sample.info.csv"
+  label.path         <- "/Users/ep/Documents/1_datasets/dataset_smith_2014/output/y.true.csv"
+}
+
+# select pathway database
+
+pway <- "btm"
+
+```
+
+
+# load analysis inputs
+
+1. expression set - matrix of expression (either intensities, or vst transformed rna-seq counts)
+rows as gene names (symbols), columns as samples
+2. pathway list - named list of lists: with pathway name as item names, and gene symbols as sub lists
+
+```{r}
+
+# expression set
+
+x.mat <- read.table(file = data.path.scaled, header = T, sep = ',')
+
+# sample information
+
+samp.info <- read.table(file = samp.info.path, header = T, sep = ',')
+
+samp.info$condition <- factor(samp.info$condition, levels = c(0,1))
+
+# class labels - convert to a factor, where sepsis = 1 and control = -1 (SVM compatible)
+
+(y.true <- read.table(file = label.path, header = F, sep = ',', check.names = F))
+(y.true <- factor(y.true[[1]]))
+
+# double checking that x.mat and the labels are in the same order as the sample information
+
+identical(samp.info$sampleID, rownames(x.mat))
+all(samp.info$condition == y.true)
+
+# pathway list
+
+if(pway == "btm"){
+  load(file=here("btm", "btm.pathway.named.list.RData"))
+  pathway.list <- btm.list
+}
+
+# information on the genes present in the training data
+sprintf("The dimensions of the train matrix: %.i samples (rows) %.i genes (columns)", dim(x.mat)[1], dim(x.mat)[2])
+sprintf("The total number of genes in the training data: %.i", dim(x.mat)[2])
+sprintf("Number of genes across all btm modules: %.i:",length(pathway.list %>% unname %>% unlist %>% unique))
+sprintf("The number of genes in the training data that belong to a btm module: %.i", sum(colnames(x.mat) %in% (pathway.list %>% unname %>% unlist %>% unique)))
+
+```
+
+## Create filtered pathway list based on genes present in the Training Set
+
+```{r}
+
+# filter the pathway list on the genes present in the dataset, and remove any empty groups
+
+pathway.lst.fil <- lapply(pathway.list, function(x){x[which(x %in% colnames(x.mat))]}) %>% purrr::compact() 
+
+# remove pathways with a single gene => no information on gene relationships
+
+pathway.lst.fil <- pathway.lst.fil[which(!lengths(pathway.lst.fil) == 1)]
+
+
+# save the filtered pathway list
+
+save(pathway.lst.fil, file = here("output", dataset, paste(pway, "pway.lst.fil.RData", sep = ".")))
+
+```
+
+
+## Calculate Module Homogeneity Score (MHS) for all gene modules
+
+Compute a measure of the variance of the expression of the genes in this pathway between patients.
+Are the same genes up / down regulated in this pathway over all patients, or is there more variation, i.e. different genes in a pathway up / down regulated in sepsis / control?
+
+Calculate the mean pairwise MI for all pathway groups
+
+```{r}
+
+# identify large pathways
+
+lst.counts <- lapply(pathway.lst.fil, length)
+
+# order pathway list by length, ascending
+
+pathway.lst.fil <- pathway.lst.fil[order(unlist(lst.counts))]
+
+# calculate metric for all pathways - map set of all pathways to the calcMeanPWMI function
+
+(pwmi.output <- map(pathway.lst.fil, calcMeanPwMI, x.mat))
+pwmi.values <- pwmi.output %>% unname %>% unlist
+
+# dataframe for plotting
+
+(pway.het <- data.frame(pathway = names(pathway.lst.fil),
+           pwise = pwmi.values,
+           rank = rank(pwmi.values),
+           length = lapply(pathway.lst.fil, length) %>% unname %>%  unlist) %>% 
+  dplyr::filter(!is.na(pwise)) %>% 
+  arrange(rank)
+)
+
+# view all pathways with their calculated MHS
+pway.het %>% as_tibble %>% print(n=Inf)
+
+# save the pathway heterogenaity output table
+
+write.table(pway.het,
+            file=here("output", dataset, paste(pway, "pway.het", "csv", sep = '.')),
+            sep = '\t',
+            row.names = F,
+            col.names = T,
+            quote = F)
+
+```
+
+## Figure 4: Visualise pathway heterogeneity
+
+```{r}
+
+# Load pre-calculated pathway heterogeneity table
+
+pway.het <- read.table(file = here("output", dataset, paste(pway, "pway.het", "csv", sep = '.')), 
+           header = T,
+           sep = '\t')
+
+
+# select illustrative pathways, one with low and one with high MHS
+
+ill.pways <- c(
+               "type I interferon response (M127)",
+              "intracellular transport (M147)" 
+               )
+```
+
+LHS: Plot of module MHS rank against module MHS
+
+```{r}
+
+(pway.het.rank.plot <- pway.het %>% 
+  ggplot(aes(x = rank, y = pwise)) +
+  geom_point() +
+  geom_point(data = pway.het %>% dplyr::filter(pathway %in% ill.pways), aes(x = rank, y=pwise), color = "red", size = 5) +
+  scale_y_continuous(limits = c(0,0.8)) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),
+        axis.text.x = element_text(size = 18),
+        axis.text.y = element_text(size = 18),
+        axis.title.x = element_text(size = 18),
+        axis.title.y = element_text(size = 18)) +
+  xlab("Module Rank (by MHS)") +
+  ylab("MHS")
+)
+
+if (!file.exists(here("figs", "grp_reg_fs", dataset))){
+    dir.create(here("figs", "pathway_het", dataset))
+}
+
+ggsave(filename = here("figs", "pathway_het", paste(dataset, pway, "pathway.rank", "pdf", sep = ".")), plot = pway.het.rank.plot)
+
+```
+
+RHS: Heatmaps illustrating pathway heterogenaity in selected modules, with low and high MHS
+
+```{r}
+
+# scale counts to between zero and 1, by gene - for the purpose of visualisation in a heatmap
+
+min.max.counts <- x.mat %>%
+  apply(MARGIN = 1, FUN = minMaxScale) %>% t() # transpose required as apply transposes the matrix
+
+# take random, stratified sample of patients - ease of visualisation at heatmap
+
+# number of samples per class
+n.samples = 20
+
+# sample
+mm.sample <- min.max.counts %>% 
+    as.data.frame %>% 
+    tibble::rownames_to_column(var = "sampleID") %>% 
+    dplyr::left_join(samp.info %>% dplyr::select(sampleID, condition), by = join_by(sampleID)) %>% 
+  dplyr::group_by(condition) %>%
+  dplyr::slice_sample(n = n.samples)
+
+
+# high MI
+
+plotGGHeatMap(g.list = pathway.lst.fil$`type I interferon response (M127)`, 
+              mm.counts = mm.sample, 
+              dset = dataset, 
+              pway.name = "type I interferon response (M127)")
+
+# low MI
+
+plotGGHeatMap(g.list = pathway.lst.fil$`intracellular transport (M147)`, 
+              mm.counts = mm.sample, 
+              dset = dataset, 
+              pway.name = "intracellular transport (M147)")
+
+
+```
+
+## Create latex table of top 10 pathways ranked by MHS
+
+```{r}
+
+(pway.het.top10 <- pway.het %>% 
+  filter(!str_detect(pathway, "^TBA")) %>% 
+  tail(10) %>% 
+  arrange(-pwise) %>% 
+  dplyr::select(pathway, pwise)
+)
+
+pway.het.top10.xtable <- xtable(pway.het.top10)
+digits(pway.het.top10.xtable) <- 3
+pway.het.top10.xtable
+print(pway.het.top10.xtable, include.rownames = FALSE, include.colnames = TRUE, sanitize.text.function = I, hline.after = c(0),
+      file = here("output", dataset, "pway.het.top10.txt"))
+
+```
+

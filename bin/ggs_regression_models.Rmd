@@ -1,0 +1,799 @@
+---
+title: "Grouped Regression Models - Feature Selection Pipeline"
+author: "Ed Parkinson"
+editor_options: 
+  chunk_output_type: console
+---
+
+**create an overall pipeline that runs from the command line**
+**iterate over alpha, tau, and the grouping sets - as for affinity-vae**
+**overall hyper parameters - tau, alpha, the set of pathway groupings**
+**Save the models, meta data and performance measures as a combined object to recall**
+
+## load libraries
+
+```{r}
+
+here::i_am("bin/ggs_regression_models.Rmd")
+
+# data wrangling
+library(here)
+library(tidyverse)
+library(sloop)
+library(coop)         # fast calculation of correlation matrices
+library(pracma)       # calculation of lambda values on log scale
+
+# ml classification
+library(glmnet)       # for logistic regression, and performance scores
+library(grpreg)       # regression for variables with grouped covariates (grouped regression)
+library(doParallel)   # enables parallelisation of cores
+library(caret)        # for standard performance scores
+library(stabm)        # for stability measures
+library(rsample)      # for randomised, stratified, train test split
+library(MLmetrics)    # for calculation of AUPRC (area under precision recall curve)
+library(rPref)
+
+# parallelisation
+library(furrr)
+library(future)
+
+# source functions
+source(here("scr", "createGeneGroupsList.R"))
+source(here("scr", "createTrainTestSplits.R"))
+source(here("scr", "eNetFSallLambda.R"))
+source(here("scr", "glmnetExtractFeatures.R"))
+source(here("scr", "grpRegOverlapEP.R")) # contains adapted functions from library grpregOverlap that is no longer maintained
+source(here("scr", "grpRegFSallLambda.R"))
+source(here("scr", "grpRegExtractFeatures.R"))
+source(here("scr", "perfScores.R"))
+source(here("scr", "stability_metrics.R"))
+# source(here("scr", "sepsis_biomarker_signatures.R"))
+source(here("scr", "loadRData.R"))
+# source(here("scr", "downSampleTest.R"))
+
+```
+
+## analysis parameters
+
+```{r}
+
+# define training dataset
+
+dataset <- "smith"
+
+# define validation datasets
+
+vset <- "protect"  # "wynn" "protect" "cernada"
+
+# define pathway database
+
+pway <- "btm"
+
+# flag to set filter on genes common to train and test sets. Set to false to measure stability of 
+# gene selection over all genes in train set without performing performance evaluation on test sets
+
+c.gene.flag <- T
+
+# set k - the number of features include in the model for testing on test set
+
+test.n.features <- 15
+
+# flag whether this is a testing run and requires a reduced sample size
+
+test.run <- F
+
+```
+
+# load analysis inputs
+
+```{r}
+
+# training dataset path
+
+# if(dataset == "smith"){
+#   data.path.scaled   <- "/Users/ep/Documents/1_datasets/dataset_smith_2014/output/smith.exp.mat.var.fil.scaled.csv"
+#   # data.path.raw      <- "/Users/ep/Documents/1_datasets/dataset_smith_2014/output/smith.exp.mat.var.fil.csv"
+#   # samp.info.path     <- "/Users/ep/Documents/1_datasets/dataset_smith_2014/output/sample.info.csv"
+#   label.path         <- "/Users/ep/Documents/1_datasets/dataset_smith_2014/output/y.true.csv"
+# }
+# 
+# # test dataset paths
+# 
+# if (vset == "wynn"){
+#   t.data.path.scaled   <- "/Users/ep/Documents/1_datasets/dataset_wynn/output/wynn.exp.mat.filtered.scaled.los.csv"
+#   # t.samp.info.path     <- "/Users/ep/Documents/1_datasets/dataset_wynn/output/sample.info.los.csv"
+#   t.label.path         <- "/Users/ep/Documents/1_datasets/dataset_wynn/output/y.true.los.csv"
+# } else if (vset == "cernada"){
+#   t.data.path.scaled   <- "/Users/ep/Documents/1_datasets/dataset_cernada/output/exp.mat.filtered.scaled.csv"
+#   # t.samp.info.path     <- "/Users/ep/Documents/1_datasets/dataset_cernada/output/sample.info.csv"
+#   t.label.path         <- "/Users/ep/Documents/1_datasets/dataset_cernada/output/y.true.csv"
+# } else if (vset == "protect"){
+#   t.data.path.scaled   <- "/Users/ep/Documents/1_datasets/dataset_pearth/an0304/output/grp_reg_outputs/vst.mat.filtered.scaled.csv"
+#   # t.samp.info.path     <- "/Users/ep/Documents/1_datasets/dataset_pearth/an0304/output/grp_reg_outputs/sample.info.csv"
+#   t.label.path         <- "/Users/ep/Documents/1_datasets/dataset_pearth/an0304/output/grp_reg_outputs/y.true.csv"
+# }
+
+
+if(dataset == "smith"){
+  data.path.scaled   <- here("input", "training", "training.smith.scaled.csv")
+  label.path         <- here("input", "training", "training.y.true.csv")
+}
+
+# test dataset paths
+
+if (vset == "wynn"){
+  t.data.path.scaled   <- here("input", "test_1", "test1.wynn.scaled.csv")
+  t.label.path         <- here("input", "test_1", "test1.y.true.csv")
+} else if (vset == "cernada"){
+  t.data.path.scaled   <- here("input", "test_2", "test2.cernada.scaled.csv")
+  t.label.path         <- here("input", "test_2", "test2.y.true.csv")
+} else if (vset == "protect"){
+  t.data.path.scaled   <- here("input", "test_3", "test3.protect.scaled.annon.csv")
+  t.label.path         <- here("input", "test_3", "test3.y.true.csv")
+}
+
+# load expression sets
+
+x.mat <- read.table(file = data.path.scaled, header = T, sep = ',')
+
+x.mat.test <- read.table(file = t.data.path.scaled, header = T, sep = ',')
+
+# class labels
+
+y.true <- read.table(file = label.path, header = F, sep = ',', check.names = F)
+y.true <- as.numeric(y.true[[1]])
+y.true.test <- read.table(file = t.label.path, header = F, sep = ',', check.names = F)
+y.true.test <- as.numeric(y.true.test[[1]])
+
+
+# sample information
+
+# samp.info <- read.table(file = samp.info.path, header = T, sep = ',')
+# samp.info$condition <- factor(samp.info$condition, levels = c(0,1))
+# samp.info.test <- read.table(file = t.samp.info.path, header = T, sep = ',')
+# table(samp.info$condition)
+# table(samp.info.test$condition)
+
+
+# double checking that x.mat and the labels are in the same order as the sample information
+# 
+# identical(samp.info$sampleID, rownames(x.mat))
+# all(samp.info$condition == y.true)
+
+# pathway list
+
+if(pway == "btm"){
+  load(file=here("btm", "btm.pathway.named.list.RData"))
+  pathway.list <- btm.list
+}
+
+# pre-calculated pathway heterogenaity in the training dataset
+
+pway.het <- read.table(file=here("output", dataset, paste(pway, "pway.het", "csv", sep = '.')),
+            sep = '\t',
+            header = T)
+
+# filter matrix on the genes common to training and test sets
+
+common.genes <- intersect(colnames(x.mat), colnames(x.mat.test))
+
+if(c.gene.flag){
+  x.mat <- x.mat[,common.genes]
+  x.mat.test <- x.mat.test[,common.genes]
+}
+
+# calculate the correlation matrix for the training matrix - used in feature stability calculations
+
+corr.mat <- scaleCorrelationCoop(x.mat)
+
+# create sample datasets if testing run
+
+if(test.run){
+  x.mat <- x.mat[,1:500]
+  x.mat.test <- x.mat.test[,1:500]
+  print("Warning - TEST RUN")
+}
+
+# split train matrix into train and test folds for performance and feature stability measurement
+
+train.test.data <- createTrainTestSplits(x.mat, y.true, k=10, r=10)
+
+## create output folders
+
+if (!file.exists(here("output", dataset, "models"))){
+    dir.create(here("output", dataset, "models"))
+  }
+if (!file.exists(here("output", dataset, "meta"))){
+    dir.create(here("output", dataset, "meta"))
+}
+if (!file.exists(here("output", dataset, "perf"))){
+    dir.create(here("output", dataset, "perf"))
+}
+if (!file.exists(here("output", dataset, vset))){
+    dir.create(here("output", dataset, vset))
+}
+if (!file.exists(here("figs", "grp_reg_fs", dataset))){
+    dir.create(here("figs", "grp_reg_fs", dataset))
+}
+
+# create gene groups list from the pathway list and save for post processing
+
+gglst <- createGeneGroupsList(pathway.lst = pathway.list, gene.lst = colnames(x.mat))
+
+# save(gglst, file = here("output", dataset, vset, paste(pway, "gglst.RData", sep = ".")))
+
+
+
+# print dimensions of the train and test sets
+
+sprintf("The dimensions of the train matrix: %.i samples (rows) %.i genes (columns)", dim(x.mat)[1], dim(x.mat)[2])
+sprintf("The length of the train labels vector: %.i samples ", length(y.true))
+
+sprintf("The dimensions of the test matrix: %.i samples (rows) %.i genes (columns)", dim(x.mat.test)[1], dim(x.mat.test)[2])
+sprintf("The length of the test labels vector: %.i samples ", length(y.true.test))
+
+```
+
+
+## baseline model: elastic net
+
+Train model, k-fold cross validation, evaluate on test set, extract selected features at each lambda value
+
+```{r}
+# manually defined lambda values - for consistency across the folds
+
+(lambda.path = pracma::logspace(x1 = 0.2, x2 = -3, n = 150))
+
+alpha = 0.95
+
+# plot the lambda values - check the log scale
+
+ggplot() +
+  geom_point(aes(x = 1:length(lambda.path), y = lambda.path))
+
+# train in nested cross validation loop to asses performance - generates results for all lambda values, for every fold.
+
+cv.preds.enet <- purrr::pmap(train.test.data,
+                             eNetFSallLambda,
+                             inner.k = "loocv", 
+                             alpha = alpha, 
+                             lambda.path = lambda.path)
+
+# average performance scores over all folds, for each lambda value
+
+enet.scores <- perfScoresDFAllFolds(cv.preds.enet, calc.means = T)
+
+# create list of selected feature list by lambda dataframes
+
+feature.tib <- map(.x = cv.preds.enet,
+                    .f = function(x){tibble::enframe(x$fs.results$sel.feature, name = "lambda", value = "sel.features")})
+
+# bind all the columns with the selected features
+
+feature.tib.all <- purrr::list_cbind(lapply(feature.tib, '[', 2))
+
+# calculate stability measures
+
+corr.mat <- scaleCorrelationCoop(x.mat)
+
+stab.by.lambda <- map(1:nrow(enet.scores), calcRowStabiity, feature.tib.all, corr.mat)
+
+# train on the full dataset to extract features
+
+cv.enet.res <- cv.glmnet(x= as.matrix(x.mat),
+                        y = y.true,
+                        family='binomial',
+                        alpha= alpha,
+                        type.measure = 'class',
+                        nfolds = length(y.true),
+                        grouped=FALSE,
+                        lambda = lambda.path,
+                        keep = TRUE,
+                        parallel = FALSE)
+
+enet.sel.fids <- glmnetExtractFeatures(cv.enet.res, x.mat)
+
+# update scores dataframe to include stabilty metrics, and number of features selected when trained on full dataset
+
+(enet.scores <- enet.scores %>% 
+    dplyr::mutate(lambda = lambda.path, .before = auc) %>% 
+    dplyr::mutate(zstab = lapply(stab.by.lambda, '[', 1) %>% unlist,
+                                                              nogstab = lapply(stab.by.lambda, '[', 2) %>% unlist) %>% 
+    dplyr::left_join(enet.sel.fids$results.df %>% dplyr::select(lambda, num.features), by= join_by(lambda)))
+
+# predict on the test set
+
+# identify the lambda value for number of test features, and print the features
+
+(enet.perf.sel <- enet.scores[sapply(test.n.features, function(x){which(enet.scores$num.features >= x)[1L]}),])
+(sel.features <- enet.sel.fids$sel.feature[sapply(test.n.features, function(x){which(enet.sel.fids$results.df$num.features  >= x)[1L]})])
+
+# log odds predictions
+
+if(c.gene.flag){
+  y.pred.test.enet <- predict(cv.enet.res, newx = as.matrix(x.mat.test), s = enet.perf.sel$lambda)
+  test.scores.enet <- perfScoresAllLambda(y.pred.test.enet, y.true.test)
+  print(test.scores.enet)
+} else {
+  y.pred.test.enet <- NULL
+  test.scores.enet <- NULL
+}
+
+
+# save outputs
+
+enet.res <- list('cv.preds' = cv.preds.enet,
+                 'val.perf' = enet.scores,
+                 'model' = cv.enet.res, 
+                 'sel.feat' = enet.sel.fids, 
+                 'y.test' = y.true.test, 
+                 'y.pred.test' = y.pred.test.enet, 
+                 'test.scores' = test.scores.enet)
+
+```
+
+save results
+
+```{r}
+
+if(c.gene.flag){
+  save(enet.res,
+       file = here("output", dataset, vset, paste("eNet.res", test.n.features, alpha, "RData", sep = ".")))
+  } else {
+    save(enet.res,
+       file = here("output", dataset, paste("eNet.stab.res", alpha, "RData", sep = ".")))
+  }
+
+```
+
+## testing - extracting the selected features at each fold to illustrate the stability
+
+=== is this for deletion?? ====
+
+```{r}
+
+# to get the mean number of features selected across all folds for a specific lambda value
+
+# use the feature.tib.all object - has the set of features selected for every lambda at every fold
+# count the number of features - number of values in each cell
+# 
+# n.feat.lst <- map(.x = feature.tib,
+#     .f = function(x){lapply(x$sel.features, length)})
+# 
+# n.feat.df <- as.data.frame(do.call(cbind, lapply(n.feat.lst, as.numeric)))
+# 
+# mean.f.by.lambda <- data.frame(lambda = lambda.path,
+#                                mean.f = rowMeans(n.feat.df))
+
+# to get the groups selected at each lambda at each fold
+
+# only applies to GEL
+
+```
+
+
+
+## grouped regression:gel - alternative feature selection and performance
+
+Define parameters for main training runs
+Note: lambda ranges based on trial and error in testing gel and grplasso models
+Train model, k-fold cross validation, evaluate on test set, extract selected features at each lambda value
+
+```{r}
+
+# arg inputs for group regression model
+
+penalty = 'gel'
+
+if(penalty == 'gel'){
+  gene.groups <-  "grp_orph"
+  gene.list <-  gglst$gene.grp.lst
+  alpha <-  0.1
+  tau <-  0.3
+  lambda.path.grpreg <-  pracma::logspace(x1 = 0.7, x2 = -0.7, n = 150)
+}
+
+print(range(lambda.path.grpreg))
+
+ggplot() +
+  geom_point(aes(x = 1:length(lambda.path.grpreg), y = lambda.path.grpreg))
+
+# set up multi core session
+# set seed so that function argument evaluation is the same on all cores (e.g.) the k-fold inner cross validation loop is same)
+
+plan(multisession, workers = 4)
+options <- furrr::furrr_options(seed = 123)
+
+# fit cross validated model with different penalties, selecting between 25 and 50 features in each case
+
+cv.preds.grpreg <- furrr::future_pmap(.l = train.test.data, 
+                                    grpRegFSallLambda, 
+                                    inner.k = 10, 
+                                    pen = penalty, 
+                                    grp.lst = gene.list,
+                                    alpha = alpha,
+                                    lambda.path = lambda.path.grpreg,
+                                    lambda.min = 0.1,
+                                    tau = tau, 
+                                    .options = options)
+
+# end parallel session
+
+plan(sequential)
+
+# get the performance scores by lambda value, over all folds
+
+(grpreg.scores <- perfScoresDFAllFolds(cv.preds.grpreg))
+
+# create list of selected feature list by lambda data frames
+
+feature.tib <- map(.x = cv.preds.grpreg,
+                    .f = function(x){tibble::enframe(x$fs.results$sel.feature, name = "lambda", value = "sel.features")})
+
+# bind all the columns with the selected features
+
+feature.tib.all <- purrr::reduce(feature.tib, dplyr::full_join, by = join_by(lambda)) %>% 
+  dplyr::select(-lambda) # ALTERNATIVE
+
+# calculate stability measures
+
+stab.by.lambda <- map(1:nrow(grpreg.scores), calcRowStabiity, feature.tib.all, corr.mat)
+
+# Train on full dataset to extract features and groups selected
+
+grpreg.fit <- cv.grpregOverlap_EP(X = as.matrix(x.mat),
+                                        y = y.true,
+                                        group = gene.list,
+                                        penalty= penalty,
+                                        family= "binomial",
+                                        lambda = lambda.path.grpreg,
+                                        k = 10, #nrow(x.mat), # leave one out cross validation
+                                        alpha = alpha,
+                                        tau = tau)
+
+# extract selected features and summary results data
+
+grpreg.sel.fids <- GrpRegExtractFeaures(grpreg.fit)
+
+# update scores dataframe to include stabilty metrics, and number of features selected when trained on full dataset
+
+(grpreg.scores <- grpreg.scores %>%
+    dplyr::mutate(lambda = lambda.path.grpreg, .before = auc) %>% 
+    dplyr::mutate(zstab = lapply(stab.by.lambda, '[', 1) %>% unlist,
+                                                              nogstab = lapply(stab.by.lambda, '[', 2) %>% unlist) %>% 
+    dplyr::left_join(grpreg.sel.fids$results.df %>% dplyr::select(lambda, num.features), by= join_by(lambda)))
+
+# identify the lambda value for number of test features
+
+(grpreg.perf.sel <- grpreg.scores[sapply(test.n.features, function(x){which(grpreg.scores$num.features >= x)[1L]}),])
+
+# log odds predictions
+
+if(c.gene.flag){
+  y.pred.test.grpreg <- predict.cv.grpregOverlap_EP(grpreg.fit, X = as.matrix(x.mat.test), type="link", lambda = grpreg.perf.sel$lambda)
+  (test.scores.grpreg <- perfScoresAllLambda(y.pred.test.grpreg, y.true.test))
+} else {
+  y.pred.test.grpreg <- NULL
+  test.scores.grpreg <- NULL
+}
+
+# save outputs
+
+gel.res <- list('cv.preds' = cv.preds.grpreg,
+                'val.perf' = grpreg.scores, 
+                'model' = grpreg.fit, 
+                'sel.feat' = grpreg.sel.fids,
+                'y.test' = y.true.test, 
+                'y.pred.test' = y.pred.test.grpreg, 
+                'test.scores' = test.scores.grpreg)
+
+if(c.gene.flag){
+  save(gel.res,
+       file = here("output", dataset, vset, paste("gel.res", test.n.features, pway, gene.groups, alpha, tau, "RData", sep = ".")))
+  } else {
+    save(gel.res,
+       file = here("output", dataset, paste("gel.stab.res", pway, gene.groups, alpha, tau, "RData", sep = ".")))
+  }
+
+```
+
+
+## feature weighted elastic net
+
+Generate anciliary feature information matrix from pathway heterogenaity data
+
+```{r}
+
+# filter the pathway list on the genes in the matrix, and remove pathways with zero and single genes
+
+pathway.lst.fil <- lapply(pathway.list, function(x){x[which(x %in% colnames(x.mat))]}) %>% purrr::compact()
+pathway.lst.fil <- pathway.lst.fil[which(!lengths(pathway.lst.fil) == 1)]
+
+# check that all the genes in the filtered pathway list are in the dataset [expect TRUE]
+all(pathway.lst.fil %>% unname %>% unlist %in% colnames(x.mat))
+
+# check all pathways in the filtered list have data in the pway.het table [expect FALSE]
+any(!names(pathway.lst.fil) %in% pway.het$pathway)
+
+# join the pathway het measure to the filtered list of pathways
+(pway.het.weights.df <- pathway.lst.fil %>% # start with pathway list
+  tibble::enframe(name = "pathway", value = "genes") %>% 
+  tidyr::unnest(cols = genes) %>%  # expand out to row per gene/pathway combination
+  dplyr::left_join(pway.het %>% dplyr::select(pathway, pwise), by = join_by(pathway)) %>% # join on heterogenaity scores
+  dplyr::slice_max(order_by = pwise, by = genes, with_ties = F) #%>%  # take the maximum score where genes is in multiple pathways, ignore ties
+)
+
+# calculate the median pwise value and set as default penalty for all genes
+pwise.vec <- rep(median(pway.het.weights.df$pwise), times = length(colnames(x.mat)))
+
+# add weights for genes by matching on position of weighted genes in the full gene list
+
+pwise.vec[match(pway.het.weights.df$genes, colnames(x.mat))] <- pway.het.weights.df$pwise
+
+# store auxiliary matrix
+
+z <- matrix(data = pwise.vec, nrow = length(pwise.vec), ncol = 1)
+
+# save pairwise weights for all genes
+
+pwise.df <- data.frame('gene' = colnames(x.mat), 'pwise' = pwise.vec)
+
+save(pwise.df, file = here("output", dataset, vset, paste(pway, "pwise", "RData", sep = ".")))
+
+```
+
+Train fwelnet model
+
+```{r}
+
+# manually defined lambda values - for consistency across the folds - and set global inputs and collector for scores over grid search
+
+(lambda.path.fwelnet = pracma::logspace(x1 = 0.2, x2 = -3, n = 150))
+
+alpha = 0.95
+
+# theta <- 2 # weighting hyper parameter that can be tuned
+
+val.scores.fwelnet.search <- NULL
+test.scores.fwelnet.search <- NULL
+
+# grid search entire analysis over alternative values of theta
+
+theta.range <- c(2.5)
+# (theta.range <- seq(0.25, 3.75, 0.25)) # for full grid search - change the file saved to below
+
+for(theta in theta.range){
+  
+# use fwelnet weight function to transform z to feature weights
+
+p <- nrow(z)
+exp_term <- drop(exp(z %*% theta))
+penalties = sum(exp_term) / p * (1/ exp_term)
+
+# train in nested cross validation loop to asses performance - generates results for all lambda values, for every fold.
+
+cv.preds.fwelnet <- purrr::pmap(train.test.data,
+                             eNetFSallLambda,
+                             inner.k = "loocv", 
+                             alpha = alpha,
+                             penalties = penalties,
+                             lambda.path = lambda.path.fwelnet)
+
+# average performance scores over all folds, for each lambda value [note issue that lambda not same at given index over the folds]
+
+fwelnet.scores <- perfScoresDFAllFolds(cv.preds.fwelnet, calc.means = T)
+
+# create list of selected feature list by lambda dataframes
+
+feature.tib <- map(.x = cv.preds.fwelnet,
+                    .f = function(x){tibble::enframe(x$fs.results$sel.feature, name = "lambda", value = "sel.features")})
+
+# bind all the columns with the selected features
+
+feature.tib.all <- purrr::list_cbind(lapply(feature.tib, '[', 2))
+
+# function to extract each selected features from each row of the table, and calculate stability measures
+
+corr.mat <- scaleCorrelationCoop(x.mat)
+
+stab.by.lambda <- map(1:nrow(fwelnet.scores), calcRowStabiity, feature.tib.all, corr.mat)
+
+# train on the full dataset to extract features
+
+cv.fwelnet.res <- cv.glmnet(x= as.matrix(x.mat),
+                        y = y.true,
+                        family='binomial',
+                        alpha= alpha,
+                        type.measure = 'class',
+                        nfolds = length(y.true),
+                        grouped=FALSE,
+                        lambda = lambda.path.fwelnet,
+                        penalty.factor = penalties,
+                        keep = TRUE,
+                        parallel = FALSE)
+
+fwelnet.sel.fids <- glmnetExtractFeatures(cv.fwelnet.res, x.mat)
+
+
+# update scores dataframe to include stabilty metrics, and number of features selected when trained on full dataset
+
+(fwelnet.scores <- fwelnet.scores %>% 
+    dplyr::mutate(lambda = lambda.path.fwelnet, .before = auc) %>% 
+    dplyr::mutate(zstab = lapply(stab.by.lambda, '[', 1) %>% unlist,
+                                                              nogstab = lapply(stab.by.lambda, '[', 2) %>% unlist) %>% 
+      dplyr::left_join(fwelnet.sel.fids$results.df %>% dplyr::select(lambda, num.features), by= join_by(lambda)))
+
+
+# predict on the test set
+
+# identify the lambda value for number of test features, and print the features
+
+(fwelnet.perf.sel <- fwelnet.scores[sapply(test.n.features, function(x){which(fwelnet.scores$num.features >= x)[1L]}),])
+(fwelnet.sel.features <- fwelnet.sel.fids$sel.feature[sapply(test.n.features, function(x){which(fwelnet.sel.fids$results.df$num.features  >= x)[1L]})])
+
+# log odds predictions
+
+  
+if(c.gene.flag){
+  
+y.pred.test.fwelnet <- predict(cv.fwelnet.res, newx = as.matrix(x.mat.test), s = fwelnet.perf.sel$lambda)
+test.scores.fwelnet <- perfScoresAllLambda(y.pred.test.fwelnet, y.true.test)
+print(test.scores.fwelnet)
+
+} else {
+  
+y.pred.test.fwelnet <- NULL
+test.scores.fwelnet <- NULL
+  
+}
+  
+
+
+# combine validation scores
+
+if(is.null(val.scores.fwelnet.search)){
+  val.scores.fwelnet.search <- fwelnet.scores %>% dplyr::select(mean.features, lambda, auc)
+} else {
+  val.scores.fwelnet.search <- val.scores.fwelnet.search %>% dplyr::left_join(fwelnet.scores %>% dplyr::select(lambda, auc), by = join_by(lambda))
+}
+
+# combine test scores
+
+(test.scores.fwelnet.search <- cbind(test.scores.fwelnet.search, test.scores.fwelnet))
+
+
+# save outputs for this value of theta
+
+fwelnet.res <- list('cv.preds' = cv.preds.fwelnet,
+                    'val.perf' = fwelnet.scores, 
+                    'model' = cv.fwelnet.res, 
+                    'sel.feat' = fwelnet.sel.fids, 
+                    'y.test' = y.true.test, 
+                    'y.pred.test' = y.pred.test.fwelnet, 
+                    'test.scores' = test.scores.fwelnet)
+
+
+if(c.gene.flag){
+  save(fwelnet.res,
+       file = here("output", dataset, vset, paste("fwelnet.res", test.n.features, pway, alpha, theta, "RData", sep = ".")))
+  } else {
+    save(fwelnet.res,
+       file = here("output", dataset, paste("fwelnet.stab.res", pway, alpha, tau, "RData", sep = ".")))
+  }
+
+}
+
+```
+
+**to be deleted???**
+
+```{r}
+
+# save combined scores over all theta
+
+# colnames(test.scores.fwelnet.search) <- theta.range
+# print(test.scores.fwelnet.search)
+# 
+# colnames(val.scores.fwelnet.search) <- c("mean.features", "lambda", theta.range)
+# 
+# fwelnet.test.val.scores <- list("val" = val.scores.fwelnet.search, "test" = test.scores.fwelnet.search)
+# 
+# # save scores from predictions on the test set
+# save(fwelnet.test.val.scores, file = here("output", dataset, vset, paste("fwelNet.test.scores", test.n.features, pway, alpha, "RData", sep = ".")))
+
+```
+
+
+
+
+## Iteratively train, select features, then train again, measure performance over each iteration
+
+This is the analysis for Figure 3
+
+Illustrating of the interchangeability of features - using the baseline eNet model.
+Select a feature set, get classification performance, then remove the features from the next iteration.
+
+```{r}
+
+## number of loop iterations and target features
+n.iter <- 10
+target.features <- 5
+lambda.path <-  pracma::logspace(x1 = 0.2, x2 = -3, n = 150)
+
+## create score and selected features vector containers
+(score.lst.enet    <- vector(mode = 'list', length = n.iter))
+(sel.gene.lst.enet <- vector(mode = 'list', length = n.iter))
+(dset.dim          <- vector(mode = 'list', length = n.iter))
+
+## initialise the input matrix
+x.mat.input.enet <- x.mat
+
+for(idx in 1:n.iter){
+  
+  # train eNet model on all features
+
+  cv.enet.res <- cv.glmnet(x = as.matrix(x.mat.input.enet),
+                          y = y.true,
+                          family='binomial',
+                          alpha=0.95,
+                          type.measure = 'class',
+                          nfolds = length(y.true), # loocv
+                          grouped=FALSE,
+                          lambda = lambda.path,
+                          keep = TRUE,
+                          parallel = FALSE)
+  
+  enet.sel.fids <- glmnetExtractFeatures(cv.enet.res, x.mat.input.enet)
+  
+  # extract the feature select at the target number of features
+  
+  (enet.set.20 <- enet.sel.fids$sel.feature[sapply(target.features, function(x){which(enet.sel.fids$results.df$num.features  >= x)[1L]})])
+
+  # create a simple 5 fold cross validation split
+  
+  train.test.data <- createTrainTestSplits(x.mat.input.enet, y.true = y.true, k=10, r=1)
+  
+  # train in nested cross validation loop to asses performance - generates results for all lambda values, for every fold.
+  
+  cv.preds.enet <- purrr::pmap(train.test.data, eNetFSallLambda, inner.k = "loocv", alpha = 0.95, lambda.path = lambda.path)
+  
+  # average performance scores over all folds, for each lambda value
+  
+  (enet.scores <- perfScoresDFAllFolds(cv.preds.enet, calc.means = T))  
+  
+  # add the number of features selected at each lambda to the scores dataframe
+
+  (enet.perf.df <- enet.scores %>% 
+      dplyr::mutate(lambda = lambda.path, .before = auc) %>% 
+      dplyr::left_join(enet.sel.fids$results.df %>% dplyr::select(lambda, num.features), by= join_by(lambda)) %>% 
+      dplyr::relocate(num.features, .before = lambda)
+    )
+    
+  # extract scores at the lambda that selects n features
+  
+  (scores.target.features <- enet.perf.df[which(enet.perf.df$mean.features  >= target.features)[1L],])
+
+  # save the performance scores and selected features in collectors
+
+  score.lst.enet[[idx]] <- scores.target.features
+  sel.gene.lst.enet[[idx]] <- enet.set.20
+  dset.dim[[idx]] <- dim(x.mat.input.enet)
+  
+  # remove the selected features from the original matrix
+  
+  x.mat.input.enet <- x.mat.input.enet[,which(!colnames(x.mat.input.enet) %in% unlist(enet.set.20))]
+
+}
+
+(enet.iter.res <- list('score.lst.enet' = score.lst.enet, "sel.gene.lst.enet" = sel.gene.lst.enet))
+
+```
+
+Save outputs
+
+```{r}
+
+# save results of iterative feature removal
+save(enet.iter.res, file = here("output", dataset, "enet.iter.res.RData"))
+
+```
