@@ -25,7 +25,6 @@ library(RColorBrewer)
 
 source(here("scr", "loadRData.R"))
 source(file = here("scr", "plotGGHeatMap.R"))
-# source(here("scr", "sepsis_biomarker_signatures.R"))
 source(here("scr", "colours.R"))
 source(here("scr", "genesSelByModule.R"))
 
@@ -53,27 +52,9 @@ test.n.features <- 15
 
 ```{r}
 
-# if(dataset == "smith"){
-#   data.path.scaled   <- "/Users/ep/Documents/1_datasets/dataset_smith_2014/output/smith.exp.mat.var.fil.scaled.csv"
-#   data.path.raw      <- "/Users/ep/Documents/1_datasets/dataset_smith_2014/output/smith.exp.mat.var.fil.csv"
-#   samp.info.path     <- "/Users/ep/Documents/1_datasets/dataset_smith_2014/output/sample.info.csv"
-#   label.path         <- "/Users/ep/Documents/1_datasets/dataset_smith_2014/output/y.true.csv"
-# }
-# 
-# # load data
-# 
-# x.mat <- read.table(file = data.path.scaled, header = T, sep = ',')
-# y.true <- read.table(file = label.path, header = F, sep = ',', check.names = F)
-# (y.true <- as.numeric(y.true[[1]]))
-
 # load gene list
 
 btm.gglst <- loadRData(file = here("output", dataset, vset, paste(pway, "gglst.RData", sep = ".")))
-
-# # filter the pathway list on the genes in the matrix
-# 
-# pathway.lst.fil <- lapply(pathway.list, function(x){x[which(x %in% colnames(x.mat))]}) %>% purrr::compact()
-# pathway.lst.fil <- pathway.lst.fil[which(!lengths(pathway.lst.fil) == 1)]
 
 # pre-calculated pathway heterogenaity in the training dataset
 
@@ -85,12 +66,6 @@ pway.het <- read.table(file=here("output", dataset, paste(pway, "pway.het.csv", 
 
 pw.all.genes <- loadRData(file = here("output", dataset, vset, paste(pway, "pwise.RData", sep = ".")))
 
-```
-
-
-## load experiment results
-
-```{r}
 
 # list alternative validation sets
 
@@ -102,7 +77,7 @@ enet.orig.res         <- map(valid.sets,.f = function(x){loadRData(here("output"
 gel.orig.res          <- map(valid.sets,.f = function(x){loadRData(here("output", dataset, x, "gel.res.15.btm.grp_orph.0.1.0.3.RData"))})
 fwelnet.2.5.orig.res  <- map(valid.sets,.f = function(x){loadRData(here("output", dataset, x, "fwelnet.res.15.btm.0.95.2.5.RData"))})
 
-# load stability measurement results (independent of the valudation set, since using all genes)
+# load stability measurement results (independent of the validation set, since using all genes)
 
 enet.stab.res         <- loadRData(here("output", dataset, "eNet.stab.res.0.95.RData"))
 gel.stab.res          <- loadRData(here("output", dataset, "gel.stab.res.btm.grp_orph.0.1.0.3.RData"))
@@ -270,10 +245,6 @@ auc.plot.trio.long <- ggarrange(p.wynn.t, p.cernada.t, p.protect.t, ncol=1, nrow
 auc.plot.trio.wide <- ggarrange(p.wynn.t, p.cernada.t, p.protect.t, ncol=3, nrow=1, common.legend = F, legend="none")
 # ggsave(filename = here("figs", "grp_reg_fs", dataset, "auc.plots.wide.pdf"), plot = auc.plot.trio.wide, height = 6, width = 20)
 
-
-# calculating the 95% confidence intervals for AUC
-# (roc.list <- pROC::roc(response ~ enet + gel +fwelnet2.5, data = wynn.preds, smooth = F, algorithm = 2, ci = T, conf.level = 0.95))
-
 ```
 
 
@@ -331,61 +302,6 @@ enet.auc.stab.tab
 
 
 ## Elastic Net  - Post processing - examine selected features and performance at different feature number thresholds
-
-TO DELETE
-
-1. Plot number of features selected by lambda value - using the feature extraction from full dataset, not mean values across folds
-
-Note: below uses the training results for the run matched to the Wynn dataset => 5,169 features
-Wong would be 2x the features, but paeds, so may make less sense to include as the example.
-Trend is the same for all training runs - just the pattern that differs
-
-```{r}
-
-# (enet.lambda.n.feat.plot <- enet.orig.res$wynn$sel.feat$results.df %>% 
-#   ggplot() +
-#   geom_point(aes(x = -log10(lambda), y = num.features)) +
-#   scale_y_continuous(limits = c(0,40),breaks = seq(0,40, 5)) +
-#   scale_x_continuous(breaks = seq(0,5,0.5)) +
-#   theme_bw() +
-#   theme(axis.text.x = element_text(size = 16),
-#         axis.text.y = element_text(size = 16),
-#         axis.title.x = element_text(size = 16),
-#         axis.title.y = element_text(size = 16),
-#         panel.grid.major = element_blank()) +
-#   # scale_x_reverse()+
-#   ylab("Number of features selected") +
-#   xlab("- log10 (lambda)")
-# )
-
-# save plot
-# ggsave(filename = here("figs", "grp_reg_fs", dataset, paste("enet.lambda.n.feat", "pdf", sep = ".")), plot = enet.lambda.n.feat.plot)
-
-```
-
-2. Validation set performance metrics for different lambda and number of features selected
-
-```{r}
-
-# # gene sets and performance metrics at selected at specific feature set sizes, for illustration in slides
-# 
-# f.thresh <- c(5,10,15,20,25)
-# 
-# # extract performance scores at specific feature threshold values
-# 
-# (enet.perf.sel <- enet.orig.res$wynn$val.perf[sapply(f.thresh, function(x){which(enet.orig.res$wynn$val.perf$num.features >= x)[1L]}),])
-# 
-# # create latex table of the results
-# 
-# print(enet.perf.sel.xtable <- xtable(enet.perf.sel),
-#       include.rownames = FALSE, 
-#       include.colnames = TRUE, 
-#       sanitize.text.function = I, 
-#       hline.after = c(0))
-# (digits(enet.perf.sel.xtable) <- 3)
-# enet.perf.sel.xtable
-
-```
 
 ## Table 4: Evaluate features selected by eNet based on pathways and pathway heterogenaity
 
@@ -493,61 +409,6 @@ ggsave(filename = "seq_acc_step.pdf", plot = seq.acc.step.plot, width = 12, heig
 
 ## Feature Weighted Elastic Net  - Post processing - examine selected features and performance at different feature number thresholds
 
-Questions to answer:
-- Is the cross validated performance and stability similar
-- What does the stacked bar look like - are features in groups / pathways?
-- How does the selected features vary with theta - assume more biased towards the highly weighted pathways as theta increases - use the 15 feature case to illustrate the point
-
-TO DELETE
-1. Plot number of features selected by lambda value - using the feature extraction from full dataset, not mean values across folds
-
-```{r}
-
-# (fwelnet.lambda.n.feat.plot <- fwelnet.2.5.orig.res$wynn$val.perf %>% 
-#   ggplot() +
-#   geom_point(aes(x = -log10(lambda), y = num.features)) +
-#   scale_y_continuous(limits = c(0,40),breaks = seq(0,40, 5)) +
-#   scale_x_continuous(breaks = seq(0,5,0.5)) +
-#   theme_bw() +
-#   theme(axis.text.x = element_text(size = 16),
-#         axis.text.y = element_text(size = 16),
-#         axis.title.x = element_text(size = 16),
-#         axis.title.y = element_text(size = 16),
-#         panel.grid.major = element_blank()) +
-#   # scale_x_reverse()+
-#   ylab("Number of features selected") +
-#   xlab("- log10 (lambda)")
-# )
-
-# save plot
-# ggsave(filename = here("figs", "grp_reg_fs", dataset, paste("fwelnet.lambda.n.feat", "pdf", sep = ".")), plot = fwelnet.lambda.n.feat.plot)
-
-```
-
-2. Performance metrics for different lambda and number of features selected
-
-```{r}
-
-# gene sets and performance metrics at selected at specific feature set sizes, for illustration in slides
-
-# f.thresh <- c(5,10,15,20,25)
-# 
-# # extract performance scores at specific feature threshold values
-# 
-# (fwelnet.perf.sel <- fwelnet.2.5.orig.res$wynn$val.perf[sapply(f.thresh, function(x){which(fwelnet.2.5.orig.res$wynn$val.perf$num.features >= x)[1L]}),])
-# 
-# # create latex table of the results
-# 
-# print(fwelnet.perf.sel.xtable <- xtable(fwelnet.perf.sel),
-#       include.rownames = FALSE, 
-#       include.colnames = TRUE, 
-#       sanitize.text.function = I, 
-#       hline.after = c(0))
-# (digits(fwelnet.perf.sel.xtable) <- 3)
-# fwelnet.perf.sel.xtable
-
-```
-
 ## Table 4: Interpretability of selected features
 
 ```{r}
@@ -609,11 +470,6 @@ write.table(fwelnet.sel.pways.sum, file = here("output", dataset, vset,  paste("
 ## Figure 4D: Stacked bar chart showing pathway membership of selected genes at increasing lambda values
 
 ```{r}
-
-# determine the relevant module for the genes selected at each value of lambda
-# requires assumption where gene belongs to more than 1 module, it is the module with the higher MHS that is selected
-# this is by definition as genes weighted based on max MHS over all modules to which it belongs
-# output is the count.by.module.df - same format as for GEL below
 
 # genes selected by lambda value
 
@@ -722,10 +578,6 @@ ggsave(filename = here("figs", "grp_reg_fs", dataset, paste(vset, "btm", "fwelne
 
 ## Figure 6B: Heatmap illustrating the number of genes selected from each pathway over the 100 folds at same lambda
 
-Illustrates the stability / instability of the feature selection proceedure
-Across 100 folds of the data, applying the same level of penalisation, genes are selected from one or another pathway
-More consistent selection between pathways than seen in GEL, indicates higher stability
-
 ```{r}
 
 # find the value of lambda that selects k genes
@@ -814,14 +666,6 @@ colnames(fnet.gene.counts.by.mod.fold.comb) <- c("module", 1:100)
 
 fnet.gene.counts.by.mod.fold.comb[is.na(fnet.gene.counts.by.mod.fold.comb)] <- 0
 
-
-# previous - no counts scale
-# fnet.gene.counts.heatmap <- fnet.gene.counts.by.mod.fold.comb %>% 
-#   rowwise %>% 
-#   dplyr::mutate(sum = sum(c_across(where(is.double)))) %>% # sum across numeric rows
-#   dplyr::arrange(sum) %>% 
-#   dplyr::select(-sum)
-
 # updated to include scale
 (idx.num <- fnet.gene.counts.by.mod.fold.comb %>% 
   sapply(is.numeric) %>% 
@@ -874,14 +718,12 @@ ggsave(filename = here("figs", "grp_reg_fs", dataset, paste(vset, "btm", "fwelne
 
 ## Results of grid search over theta for fwelnet (on Wynn data)
 
-**not working - need to update once results have been run overnight - 27th Jan 26**
-
 ```{r}
 
 (theta.range <- seq(0.25, 3.75, 0.25))
 
 loadAUCFunc <- function(x){
-  loadRData(here("output", "smith", "wynn", "grid_search", paste("fwelnet.res.orig.btm.0.95.", x, ".RData", sep=""))) %>% 
+  loadRData(here("output", "smith", "wynn", paste("fwelnet.res", test.n.features, pway, "0.95", x, "RData", sep="."))) %>% 
     .$test.scores %>% 
     .["auc",]
 }
@@ -916,63 +758,11 @@ ggsave(filename = here("figs", "grp_reg_fs", dataset, "theta.search.pdf"), plot 
 
 ## Grouped Regression - GEL - Post processing - examine selected features and performance at different feature number thresholds
 
-TO DELETE
-1. Plot graphs of the number of features selected for different lambda values, and no. groups vs. features
-
-```{r}
-
-# plot of lambda vs. number of features selected, for different values of tau
-
-# gel.meta.comb <- dplyr::bind_rows(list('0.3' = gel.meta.0.3$results.df,
-#      '0.2' = gel.meta.0.2$results.df,
-#      '0.1' = gel.meta.0.1$results.df
-#      ),
-#      .id = 'id')
-
-# (gel.meta.comb <- gel.orig.res$wynn$val.perf)
-#    
-# (gel.lambda.n.feat.plot <- gel.meta.comb %>% 
-#   ggplot() +
-#   geom_point(aes(x = -log10(lambda), y = num.features,
-#                  # group = id,
-#                  # colour = id
-#                  )) +
-#   scale_y_continuous(limits = c(0,40),breaks = seq(0,40, 5)) +
-#   scale_x_continuous(breaks = seq(-5,5,0.25)) +
-#   theme_bw() +
-#   theme(legend.position = "bottom",
-#         axis.text.x = element_text(size = 16),
-#         axis.text.y = element_text(size = 16),
-#         axis.title.x = element_text(size = 16),
-#         axis.title.y = element_text(size = 16),
-#         panel.grid.major = element_blank()) +
-#   # scale_x_reverse()+
-#   ylab("Number of features selected") +
-#   xlab("- log10 (lambda)") #+
-#   # labs(colour = "tau")
-# )
-#   
-# save plots
-# ggsave(filename = here("figs", "grp_reg_fs", dataset, paste("gel.lambda.n.feat", "pdf", sep = ".")), plot = gel.lambda.n.feat.plot)
-
-```
-
-
 ## Table 4: Interpretability of selected features
 
 Generates the data for the latex table for Table 4 of the Results section
 
 ```{r}
-
-# gel.orig.res$wynn$sel.feat$sel.feature
-# btm.gglst$gene.grp.lst[49]
-# btm.gglst$gene.grp.lst[gel.pw.sel[[1]]]
-# gel.sel[[1]]
-# gel.orig.res$wynn$val.perf$num.features
-# which(gel.orig.res$wynn$val.perf$num.features  >= 15)[1L]
-# 
-# intersect(gel.orig.res$wynn$sel.feat$sel.feature[54], btm.gglst$gene.grp.lst[49])
-# gel.orig.res$wynn$sel.feat$sel.grps[54]
 
 # view gene sets and groups selected at feature threshold value
 
@@ -1013,24 +803,7 @@ write.table(gel.sel.pways, file = here("output", dataset, vset, "gel.sel.pways.c
 
 ## Figure 4E: Stacked bar chart showing pathway membership of selected genes at increasing lambda values
 
-The number of genes selected within a module increases, with decreasing lambda
-But, the number of modules selected doesn't - the selection stays concentrated in small number of modules
-insight - showing that as lambda increases, the result is more genes selected from the same groups.
-No decrease in between group sparsity - still very sparse between groups. 
-Very likely missing better genes as a result of the penalisation of genes within a group already selected coming down faster as more
-genes are selected, and excluding other, potentially much better genes.
-This is a reason not to use GEL, and example of one of its failings.
-
-Create stacked bar chart
-
 ```{r}
-
-# example for a single value of lambda
-
-# genesSelByModule(feat.names = gel.meta.0.3$sel.feature$`2.4373`,
-#                  feat.groups.idx = gel.meta.0.3$sel.grps$`2.4373`,
-#                  gl = btm.gglst$gene.grp.lst
-#                  )
 
 tauval <- 0.3
 gelmeta <- gel.orig.res$wynn$sel.feat
@@ -1100,10 +873,6 @@ ggsave(filename = here("figs", "grp_reg_fs", dataset, paste(vset, "btm", "gel", 
 
 ## Figure 6A: Heatmap illustrating the number of genes selected from each pathway over the 100 folds at same lambda
 
-Illustrates the instability of the GEL feature selection proceedure
-Across 100 folds of the data, applying the same level of penalisation, genes are selected from one or another pathway
-Inconsistent selection of groups between folds - explains the very low stability
-
 ```{r}
 
 # set value of tau, for purpuses of saving the output
@@ -1146,11 +915,7 @@ grp.sel.grp.lst <- as.list(grp.sel.grp) %>% unname
 grp.sel.grp.lst <- lapply(grp.sel.grp.lst, unlist)
 
 
-# calculate the number of genes selected by module - for a single fold, and then for all folds
-
-# genesSelByModule(ft.sel.f.lst[[80]],
-#                  grp.sel.grp.lst[[80]],
-#                  btm.gglst$gene.grp.lst) %>% print(n=Inf)
+# calculate the number of genes selected by module
 
 gene.counts.by.mod.fold <- purrr::map2(ft.sel.f.lst, 
                                         grp.sel.grp.lst, 
@@ -1208,17 +973,13 @@ ggsave(filename = here("figs", "grp_reg_fs", dataset, paste(vset, "btm", "gel", 
 ```
 
 
-
 ## Table 4: combined interpretability of features
 
 Generates the data for the latex table for Table 4 of the Results section
 
 ```{r}
 
-# the selected genes and pathways for the k gene classifier for each of the 4 models, using smith train / wynn test
-
-# master table, with model as identifier
-# join the genes on DE results from the smith dataset - log2 fc and p.value
+# join selected genes and pathways with differential expression results for the training dataset
 
 sel.genes.comb <- dplyr::bind_rows(
                  fwelnet.sel.pways.sum %>% dplyr::mutate(model = rep("fwelnet", times = nrow(.)), .before = gene),

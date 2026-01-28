@@ -47,9 +47,7 @@ source(here("scr", "grpRegFSallLambda.R"))
 source(here("scr", "grpRegExtractFeatures.R"))
 source(here("scr", "perfScores.R"))
 source(here("scr", "stability_metrics.R"))
-# source(here("scr", "sepsis_biomarker_signatures.R"))
 source(here("scr", "loadRData.R"))
-# source(here("scr", "downSampleTest.R"))
 
 ```
 
@@ -63,7 +61,7 @@ dataset <- "smith"
 
 # define validation datasets
 
-vset <- "protect"  # "wynn" "protect" "cernada"
+vset <- "wynn"  # "wynn" "protect" "cernada"
 
 # define pathway database
 
@@ -87,32 +85,6 @@ test.run <- F
 # load analysis inputs
 
 ```{r}
-
-# training dataset path
-
-# if(dataset == "smith"){
-#   data.path.scaled   <- "/Users/ep/Documents/1_datasets/dataset_smith_2014/output/smith.exp.mat.var.fil.scaled.csv"
-#   # data.path.raw      <- "/Users/ep/Documents/1_datasets/dataset_smith_2014/output/smith.exp.mat.var.fil.csv"
-#   # samp.info.path     <- "/Users/ep/Documents/1_datasets/dataset_smith_2014/output/sample.info.csv"
-#   label.path         <- "/Users/ep/Documents/1_datasets/dataset_smith_2014/output/y.true.csv"
-# }
-# 
-# # test dataset paths
-# 
-# if (vset == "wynn"){
-#   t.data.path.scaled   <- "/Users/ep/Documents/1_datasets/dataset_wynn/output/wynn.exp.mat.filtered.scaled.los.csv"
-#   # t.samp.info.path     <- "/Users/ep/Documents/1_datasets/dataset_wynn/output/sample.info.los.csv"
-#   t.label.path         <- "/Users/ep/Documents/1_datasets/dataset_wynn/output/y.true.los.csv"
-# } else if (vset == "cernada"){
-#   t.data.path.scaled   <- "/Users/ep/Documents/1_datasets/dataset_cernada/output/exp.mat.filtered.scaled.csv"
-#   # t.samp.info.path     <- "/Users/ep/Documents/1_datasets/dataset_cernada/output/sample.info.csv"
-#   t.label.path         <- "/Users/ep/Documents/1_datasets/dataset_cernada/output/y.true.csv"
-# } else if (vset == "protect"){
-#   t.data.path.scaled   <- "/Users/ep/Documents/1_datasets/dataset_pearth/an0304/output/grp_reg_outputs/vst.mat.filtered.scaled.csv"
-#   # t.samp.info.path     <- "/Users/ep/Documents/1_datasets/dataset_pearth/an0304/output/grp_reg_outputs/sample.info.csv"
-#   t.label.path         <- "/Users/ep/Documents/1_datasets/dataset_pearth/an0304/output/grp_reg_outputs/y.true.csv"
-# }
-
 
 if(dataset == "smith"){
   data.path.scaled   <- here("input", "training", "training.smith.scaled.csv")
@@ -144,21 +116,6 @@ y.true <- read.table(file = label.path, header = F, sep = ',', check.names = F)
 y.true <- as.numeric(y.true[[1]])
 y.true.test <- read.table(file = t.label.path, header = F, sep = ',', check.names = F)
 y.true.test <- as.numeric(y.true.test[[1]])
-
-
-# sample information
-
-# samp.info <- read.table(file = samp.info.path, header = T, sep = ',')
-# samp.info$condition <- factor(samp.info$condition, levels = c(0,1))
-# samp.info.test <- read.table(file = t.samp.info.path, header = T, sep = ',')
-# table(samp.info$condition)
-# table(samp.info.test$condition)
-
-
-# double checking that x.mat and the labels are in the same order as the sample information
-# 
-# identical(samp.info$sampleID, rownames(x.mat))
-# all(samp.info$condition == y.true)
 
 # pathway list
 
@@ -220,8 +177,7 @@ if (!file.exists(here("figs", "grp_reg_fs", dataset))){
 
 gglst <- createGeneGroupsList(pathway.lst = pathway.list, gene.lst = colnames(x.mat))
 
-# save(gglst, file = here("output", dataset, vset, paste(pway, "gglst.RData", sep = ".")))
-
+save(gglst, file = here("output", dataset, vset, paste(pway, "gglst.RData", sep = ".")))
 
 
 # print dimensions of the train and test sets
@@ -240,6 +196,7 @@ sprintf("The length of the test labels vector: %.i samples ", length(y.true.test
 Train model, k-fold cross validation, evaluate on test set, extract selected features at each lambda value
 
 ```{r}
+
 # manually defined lambda values - for consistency across the folds
 
 (lambda.path = pracma::logspace(x1 = 0.2, x2 = -3, n = 150))
@@ -345,32 +302,6 @@ if(c.gene.flag){
   }
 
 ```
-
-## testing - extracting the selected features at each fold to illustrate the stability
-
-=== is this for deletion?? ====
-
-```{r}
-
-# to get the mean number of features selected across all folds for a specific lambda value
-
-# use the feature.tib.all object - has the set of features selected for every lambda at every fold
-# count the number of features - number of values in each cell
-# 
-# n.feat.lst <- map(.x = feature.tib,
-#     .f = function(x){lapply(x$sel.features, length)})
-# 
-# n.feat.df <- as.data.frame(do.call(cbind, lapply(n.feat.lst, as.numeric)))
-# 
-# mean.f.by.lambda <- data.frame(lambda = lambda.path,
-#                                mean.f = rowMeans(n.feat.df))
-
-# to get the groups selected at each lambda at each fold
-
-# only applies to GEL
-
-```
-
 
 
 ## grouped regression:gel - alternative feature selection and performance
@@ -559,8 +490,8 @@ test.scores.fwelnet.search <- NULL
 
 # grid search entire analysis over alternative values of theta
 
-theta.range <- c(2.5)
-# (theta.range <- seq(0.25, 3.75, 0.25)) # for full grid search - change the file saved to below
+(theta.range <- seq(0.25, 3.75, 0.25)) # for full grid search to determine optimum theta value on test 1
+# theta.range <- c(2.5) # to run test sets 2 and 3 at the selected thera value
 
 for(theta in theta.range){
   
@@ -648,7 +579,6 @@ test.scores.fwelnet <- NULL
 }
   
 
-
 # combine validation scores
 
 if(is.null(val.scores.fwelnet.search)){
@@ -685,25 +615,23 @@ if(c.gene.flag){
 
 ```
 
-**to be deleted???**
+## save the full set of validation and test scores over the theta range (in the full grid search scenario)
 
 ```{r}
 
 # save combined scores over all theta
 
-# colnames(test.scores.fwelnet.search) <- theta.range
-# print(test.scores.fwelnet.search)
-# 
-# colnames(val.scores.fwelnet.search) <- c("mean.features", "lambda", theta.range)
-# 
-# fwelnet.test.val.scores <- list("val" = val.scores.fwelnet.search, "test" = test.scores.fwelnet.search)
-# 
-# # save scores from predictions on the test set
-# save(fwelnet.test.val.scores, file = here("output", dataset, vset, paste("fwelNet.test.scores", test.n.features, pway, alpha, "RData", sep = ".")))
+colnames(test.scores.fwelnet.search) <- theta.range
+print(test.scores.fwelnet.search)
+
+colnames(val.scores.fwelnet.search) <- c("mean.features", "lambda", theta.range)
+
+fwelnet.test.val.scores <- list("val" = val.scores.fwelnet.search, "test" = test.scores.fwelnet.search)
+
+# save scores from predictions on the test set
+save(fwelnet.test.val.scores, file = here("output", dataset, vset, paste("fwelNet.test.scores", test.n.features, pway, alpha, "RData", sep = ".")))
 
 ```
-
-
 
 
 ## Iteratively train, select features, then train again, measure performance over each iteration
